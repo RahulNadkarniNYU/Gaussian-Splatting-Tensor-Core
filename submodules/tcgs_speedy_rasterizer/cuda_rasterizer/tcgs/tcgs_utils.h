@@ -37,7 +37,6 @@ namespace TCGS_UTIL
         return __UI_TO_HALF2_TCGS(x);
     }
 
-    //convert 2 fp32s into fp16, stored as uint
     __forceinline__ __device__ uint float22reg(float x, float y)
     {
         float2 temp_f = make_float2(x, y);
@@ -47,7 +46,7 @@ namespace TCGS_UTIL
 
     __forceinline__ __device__ void load_matrix_x4(
         uint &reg0, uint &reg1, uint &reg2, uint &reg3,
-        uint* addr //Shared memory address
+        uint* addr
     )
     {
         uint smem_addr = __cvta_generic_to_shared(addr);
@@ -60,7 +59,7 @@ namespace TCGS_UTIL
 
     __forceinline__ __device__ void load_matrix_x2(
         uint &reg0, uint &reg1,
-        uint* addr //Shared memory address
+        uint* addr
     )
     {
         uint smem_addr = __cvta_generic_to_shared(addr);
