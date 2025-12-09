@@ -31,8 +31,8 @@ from utils.image_utils import psnr
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh):
     # print("Rasterizer:", rasterizer)
-    render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
-    gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
+    render_path = os.path.join(model_path, name, "rn_sr_{}".format(iteration), "renders")
+    gts_path = os.path.join(model_path, name, "rn_sr_{}".format(iteration), "gt")
     psnrs = []
     fpss = []
     times = []
@@ -59,8 +59,8 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         psnrs.append(psnr(rendering, gt).mean())
         fpss.append(1.0 / render_time)
         times.append(render_time)
-        # torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
-        # torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
     
     print("psnrs=", torch.tensor(psnrs).mean())
     print("fps=", torch.tensor(fpss).mean())
