@@ -235,24 +235,29 @@ __global__ void renderCUDA_TCGS(
         block.sync();
         const int gs_num = min(BLOCK_SIZE_TCGS, toDo);
         const half T_threshold = __float2half_rn(0.0001f);
+        const int matrix_base_offset = (thread_id&31)<<2;
+        
         for(int j = 0; !warp_done && j < gs_num; j += REDUCE_SIZE){
             uint gsmat_reg[2];
-            load_matrix_x2(gsmat_reg[0], gsmat_reg[1], multiuse_matrix + (j<<2) + ((thread_id&31)<<2));
+            uint* matrix_addr = multiuse_matrix + (j<<2) + matrix_base_offset;
+            load_matrix_x2(gsmat_reg[0], gsmat_reg[1], matrix_addr);
 
-            uint expmat_reg[4] = {0u, 0u, 0u, 0u};
-            mma_16x8x8_f16_f16(expmat_reg[0], expmat_reg[1],
-                pixmat_reg[0], pixmat_reg[1], gsmat_reg[0], expmat_reg[0], expmat_reg[1]);
-            mma_16x8x8_f16_f16(expmat_reg[2], expmat_reg[3],
-                pixmat_reg[2], pixmat_reg[3], gsmat_reg[0], expmat_reg[2], expmat_reg[3]);
-            store_exponent_mat(expmat_reg[0], expmat_reg[1], expmat_reg[2], expmat_reg[3], exponent_matrix_addr);
-            __syncwarp();
+            uint expmat_reg_0[4] = {0u, 0u, 0u, 0u};
+            mma_16x8x8_f16_f16(expmat_reg_0[0], expmat_reg_0[1],
+                pixmat_reg[0], pixmat_reg[1], gsmat_reg[0], expmat_reg_0[0], expmat_reg_0[1]);
+            mma_16x8x8_f16_f16(expmat_reg_0[2], expmat_reg_0[3],
+                pixmat_reg[2], pixmat_reg[3], gsmat_reg[0], expmat_reg_0[2], expmat_reg_0[3]);
             
-            expmat_reg[0] = expmat_reg[1] = expmat_reg[2] = expmat_reg[3] = 0u;
-            mma_16x8x8_f16_f16(expmat_reg[0], expmat_reg[1],
-                pixmat_reg[0], pixmat_reg[1], gsmat_reg[1], expmat_reg[0], expmat_reg[1]);
-            mma_16x8x8_f16_f16(expmat_reg[2], expmat_reg[3],
-                pixmat_reg[2], pixmat_reg[3], gsmat_reg[1], expmat_reg[2], expmat_reg[3]);
-            store_exponent_mat(expmat_reg[0], expmat_reg[1], expmat_reg[2], expmat_reg[3], exponent_matrix_addr + 1024);
+            store_exponent_mat(expmat_reg_0[0], expmat_reg_0[1], expmat_reg_0[2], expmat_reg_0[3], exponent_matrix_addr);
+            
+            uint expmat_reg_1[4] = {0u, 0u, 0u, 0u};
+            mma_16x8x8_f16_f16(expmat_reg_1[0], expmat_reg_1[1],
+                pixmat_reg[0], pixmat_reg[1], gsmat_reg[1], expmat_reg_1[0], expmat_reg_1[1]);
+            mma_16x8x8_f16_f16(expmat_reg_1[2], expmat_reg_1[3],
+                pixmat_reg[2], pixmat_reg[3], gsmat_reg[1], expmat_reg_1[2], expmat_reg_1[3]);
+            
+            __syncwarp();
+            store_exponent_mat(expmat_reg_1[0], expmat_reg_1[1], expmat_reg_1[2], expmat_reg_1[3], exponent_matrix_addr + 1024);
             __syncwarp();
 
             RGBD = culling_and_blending(exponent_matrix, channels_smem, T, j, thread_id, RGBD);
@@ -359,4 +364,129 @@ void TCGS::renderCUDA_Forward(
         bg_color, out_color, depth
     );
     cudaFree(feature_encoded);
+}
+
+void TCGS::renderCUDA_Forward_Graph(
+    TCGSGraph* graphHandle,
+    const dim3 grid, 
+    const dim3 block,
+    const uint2* ranges,
+    const uint* point_list,
+    int width,
+    int height,
+    int P,
+    const float2* means2D,
+    const float* features,
+    float4* conic_opacity,
+    float* final_T,
+    uint* n_contrib,
+    const float* bg_color,
+    float* out_color,
+    float* depths,
+    float* depth,
+    bool captureGraph
+)
+{
+    static uint2* feature_encoded = nullptr;
+    static size_t allocated_size = 0;
+    
+    size_t required_size = P * sizeof(uint2);
+    if (feature_encoded == nullptr || allocated_size < required_size) {
+        if (feature_encoded != nullptr) {
+            cudaFree(feature_encoded);
+        }
+        cudaMalloc(&feature_encoded, required_size);
+        allocated_size = required_size;
+    }
+    
+    if (captureGraph || !graphHandle->isInstantiated) {
+        cudaStream_t stream;
+        cudaStreamCreate(&stream);
+        
+        if (graphHandle->graph != nullptr) {
+            cudaGraphDestroy(graphHandle->graph);
+        }
+        if (graphHandle->graphExec != nullptr) {
+            cudaGraphExecDestroy(graphHandle->graphExec);
+        }
+        
+        cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+        
+        transform_coefs<<<(P + 255) / 256, 256, 0, stream>>>(
+            P, (const float*)features, depths, conic_opacity, feature_encoded, depth
+        );
+        
+        renderCUDA_TCGS<<<grid, block, 0, stream>>>(
+            ranges, point_list,
+            width, height,
+            means2D, feature_encoded, conic_opacity,
+            final_T, n_contrib,
+            bg_color, out_color, depth
+        );
+        
+        cudaStreamEndCapture(stream, &graphHandle->graph);
+        
+        cudaGraphExecUpdateResult updateResult;
+        cudaGraphNode_t errorNode;
+        
+        if (graphHandle->graphExec != nullptr) {
+            cudaGraphExecUpdate(graphHandle->graphExec, graphHandle->graph, &errorNode, &updateResult);
+            if (updateResult != cudaGraphExecUpdateSuccess) {
+                cudaGraphExecDestroy(graphHandle->graphExec);
+                cudaGraphInstantiate(&graphHandle->graphExec, graphHandle->graph, nullptr, nullptr, 0);
+            }
+        } else {
+            cudaGraphInstantiate(&graphHandle->graphExec, graphHandle->graph, nullptr, nullptr, 0);
+        }
+        
+        graphHandle->isInstantiated = true;
+        cudaStreamDestroy(stream);
+    }
+    
+    if (graphHandle->isInstantiated && graphHandle->graphExec != nullptr) {
+        cudaGraphLaunch(graphHandle->graphExec, cudaStreamLegacy);
+    } else {
+        transform_coefs<<<(P + 255) / 256, 256>>>(
+            P, (const float*)features, depths, conic_opacity, feature_encoded, depth
+        );
+        renderCUDA_TCGS<<<grid, block>>>(
+            ranges, point_list,
+            width, height,
+            means2D, feature_encoded, conic_opacity,
+            final_T, n_contrib,
+            bg_color, out_color, depth
+        );
+    }
+}
+
+void TCGS::destroyGraph(TCGSGraph* graphHandle)
+{
+    if (graphHandle == nullptr) return;
+    
+    if (graphHandle->graphExec != nullptr) {
+        cudaGraphExecDestroy(graphHandle->graphExec);
+        graphHandle->graphExec = nullptr;
+    }
+    if (graphHandle->graph != nullptr) {
+        cudaGraphDestroy(graphHandle->graph);
+        graphHandle->graph = nullptr;
+    }
+    graphHandle->isInstantiated = false;
+}
+
+void TCGS::updateGraph(TCGSGraph* graphHandle)
+{
+    if (graphHandle == nullptr || graphHandle->graph == nullptr) return;
+    
+    cudaGraphExecUpdateResult updateResult;
+    cudaGraphNode_t errorNode;
+    
+    if (graphHandle->graphExec != nullptr) {
+        cudaGraphExecUpdate(graphHandle->graphExec, graphHandle->graph, &errorNode, &updateResult);
+        if (updateResult != cudaGraphExecUpdateSuccess) {
+            // Recreate if update fails
+            cudaGraphExecDestroy(graphHandle->graphExec);
+            cudaGraphInstantiate(&graphHandle->graphExec, graphHandle->graph, nullptr, nullptr, 0);
+        }
+    }
 }

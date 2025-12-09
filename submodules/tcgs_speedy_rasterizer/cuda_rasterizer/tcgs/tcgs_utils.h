@@ -92,7 +92,7 @@ namespace TCGS_UTIL
         asm volatile( \
             "mma.sync.aligned.m16n8k8.row.col.f16.f16.f16.f16" 
             "{%0, %1}, {%2, %3}, {%4}, {%5, %6};\n" 
-            :"=r"(regD0), "=r"(regD1) : 
+            :"=&r"(regD0), "=&r"(regD1) : 
             "r"(regA0), "r"(regA1), "r"(regB), "r"(regC0), "r"(regC1)
         );
     } 
