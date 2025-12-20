@@ -1,43 +1,42 @@
-# TC-GS: A Faster and Flexible 3DGS Module Utilizing Tensor Cores
+## Optimizations to TCGS
+TC-GS: https://arxiv.org/pdf/2505.24796v2
 
-TC-GS is a flexible and fast library which can accelerate the ```renderCUDA``` process of 3DGS with Tensor Cores. It can be easily installed with various 3DGS kernels.
+This repository contains our optimized implementation of Tensor Core Gaussian Splatting (TC-GS) for inference-time rendering, along with optional inference-only culling strategies for further FPS improvements.
+The work focuses exclusively on rendering (not training) and is based on systematic profiling and optimization of the TC-GS pipeline.
 
-This repo is an example applying [Speedy-splat](https://speedysplat.github.io) with TC-GS. We have also apply TC-GS on other acceleration kernels and achieving remarkable speedup.
+What This Code Does (Read the report pdf for more details)
 
-The code and usage of TC-GS is in ```submodules/tcgs_speedy_rasterizer/tcgs```.
+1. System-Level TC-GS Optimizations (Baseline)
+We implement and evaluate the following core system optimizations:
+- CUDA Graphs to eliminate kernel launch overhead
+- Static buffer reuse to remove per-frame cudaMalloc/cudaFree
+- Restructured WMMA kernels with improved instruction-level parallelism
+- Warp coherency optimizations for better memory access and reduced divergence
+These changes improve FPS while preserving identical rendering quality (PSNR) compared to baseline TC-GS 
 
-## TODO
-+ Release the Paper ✅ [paper](https://arxiv.org/pdf/2505.24796v2)(Preprint Version)
-+ Support Training with Tensor Cores
-+ Utilizing Tensor Cores on ```preprocessCUDA``` 
-
-## Installation
-```shell
-git clone https://github.com/DeepLink-org/3DGSTensorCore --recursive
-```
+2. Inference-Time Gaussian Culling (Optional)
+On top of the optimized TC-GS baseline, we provide lightweight, inference-only culling methods that reduce the number of Gaussians processed per frame:
+- Opacity culling (safe, quality-preserving so same PSNR)
+- Screen-space radius culling (removes sub-pixel Gaussians)
+- View frustum culling
+- Distance-based LOD culling
+These methods trade off FPS vs PSNR and are intended for controlled benchmarking and analysis.
 
 ## Setup
-```shell
-conda env create --file environment.yml
-```
+1. Download MipNERF 360 dataset.
 
-## Evaluate The trained model
-```shell
-export DATA=[your_data_path]
-export SCENE=[your_scene_name]
-export CKPT=[your_checkpoint_path]
+2. 3DGS paper: https://arxiv.org/abs/2308.04079
+We first train the model on bonsai scene from MipNERF360 using the 3DGS repo (Ours and TCGS is an inference rendering only method). Our trained bonsai scene model is available here: https://drive.google.com/drive/folders/1APRkVU5F-UoMBPMscbnDBfDyrekWVhbu?usp=sharing
 
-# export CUDA_VISIBLE_DEVICES=0
+3. Clone 3DGS and TC-GS and clone ours: git clone git@github.com:RahulNadkarniNYU/Gaussian-Splatting-Tensor-Core.git --recursive
+Environment setup for TC-GS and ours can be found in env_setup_commands.md
 
-python render.py \
-    -s ${DATA}/${SCENE}/ \
-    -m ${CKPT}/${SCENE}/ \
-    --eval 
-```
-or simply use the script
-```shell
-bash eval.sh
-```
-## Result
-The result is evaluated on NVIDIA A800
-![](./result.png)
+4. Benchmark inference of 3DGS, TC-GS render.py
+Then just change paths and change permissions and run ./eval.sh in our repo.
+
+
+## Key Results (MipNeRF-360 Bonsai)
+- 330.7 FPS with system-level TC-GS optimizations
+- 336.2 FPS with opacity culling (same PSNR)
+- Up to 340+ FPS with additional LOD/radius culling (minor PSNR drop)
+- 342.1% speedup over original CUDA-core 3DGS and 6.6% speedup over TC-GS with no PSNR quality loss.
