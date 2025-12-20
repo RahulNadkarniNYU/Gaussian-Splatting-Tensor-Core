@@ -22,6 +22,8 @@ On top of the optimized TC-GS baseline, we provide lightweight, inference-only c
 - Distance-based LOD culling
 These methods trade off FPS vs PSNR and are intended for controlled benchmarking and analysis.
 
+3. Profiling: But that's just one nsys and nvprof command.
+
 ## Setup
 1. Download MipNERF 360 dataset.
 
